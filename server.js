@@ -76,27 +76,31 @@ async function searchPerson(page, firstName, lastName) {
     searchFrame = page.mainFrame();
   }
 
-  // Click "Criminal" link inside Main.aspx
+  // Click "Criminal" link inside Main.aspx and wait for frame navigation
   await searchFrame.waitForSelector('a', { timeout: 10000 });
   const criminalLink = await searchFrame.$('a[href*="criminal"]') || await searchFrame.$('a[href*="Criminal"]');
   if (criminalLink) {
-    await criminalLink.click();
-    await new Promise(r => setTimeout(r, 5000));
+    // Click and wait for the frame to navigate
+    await Promise.all([
+      searchFrame.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }),
+      criminalLink.click(),
+    ]);
   } else {
-    // Direct navigate to criminal search
+    // Direct navigate to criminal search in the frame
     await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
-    searchFrame = page.mainFrame();
   }
 
-  // Re-find frame after navigation
+  // After navigation, searchFrame reference should still be valid
+  // But re-find to be safe
   for (const frame of page.frames()) {
-    if (frame.url().includes("search.aspx")) {
+    const u = frame.url().toLowerCase();
+    if (u.includes("search.aspx") && u.includes("criminal")) {
       searchFrame = frame;
       break;
     }
   }
 
-  // Wait for the search input
+  // Wait for the search input in the frame
   await searchFrame.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
 
   // Fill the person search box (in the frame)
