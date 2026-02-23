@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: court-enrichment
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "3000"
