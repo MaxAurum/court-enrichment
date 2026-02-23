@@ -50,30 +50,50 @@ async function getBrowser() {
 
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
-  // Step 1: Visit the Search landing page (establishes ASP.NET session via iframe)
+  // Step 1: Visit the Search landing page (loads Main.aspx in an iframe)
   await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
 
-  // Step 2: The landing page loads Main.aspx in an iframe — get the frame
-  const frame = page.frames().find(f => f.url().includes("Main.aspx")) || page.mainFrame();
-  
-  // Step 3: Navigate within the frame context to criminal search
-  // Or just navigate directly now that session is established
-  await page.goto(`${BASE}/Search/search.aspx?search=criminal`, { waitUntil: "networkidle2", timeout: 30000 });
+  // Step 2: Wait for the iframe to load Main.aspx
+  await page.waitForFunction(() => {
+    const frames = document.querySelectorAll('iframe');
+    return frames.length > 0;
+  }, { timeout: 10000 });
 
-  // Wait for the search input to appear
-  await page.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
+  // Step 3: Get the iframe frame context
+  const frames = page.frames();
+  let searchFrame = frames.find(f => f.url().includes("Main.aspx"));
+  if (!searchFrame) {
+    // Fallback: navigate directly to Main.aspx
+    await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
+    searchFrame = page.mainFrame();
+  }
 
-  // Fill the person search box
-  await page.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
+  // Step 4: Click "Criminal" link inside Main.aspx to get to criminal search
+  const criminalLink = await searchFrame.$('a[href*="criminal"]') || await searchFrame.$('a[href*="Criminal"]');
+  if (criminalLink) {
+    await criminalLink.click();
+    await new Promise(r => setTimeout(r, 3000)); // Wait for navigation within iframe
+  }
+
+  // Step 5: Re-find the frame (URL may have changed)
+  const updatedFrames = page.frames();
+  searchFrame = updatedFrames.find(f => f.url().includes("search.aspx")) || searchFrame;
+
+  // Wait for the search input to appear (in the frame)
+  await searchFrame.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
+
+  // Fill the person search box (in the frame)
+  await searchFrame.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
 
   // Submit via __EVENTTARGET pattern
-  await page.evaluate(() => {
+  await searchFrame.evaluate(() => {
     __doPostBack("ctl00$ContentPlaceHolder1$btnSearch", "");
   });
-  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+  // Wait for results to load
+  await new Promise(r => setTimeout(r, 5000));
 
   // Parse search results — look for case links
-  const cases = await page.evaluate(() => {
+  const cases = await searchFrame.evaluate(() => {
     const results = [];
     // Results are typically in a grid/table with links to CriminalCase.aspx
     const links = document.querySelectorAll('a[href*="CriminalCase.aspx"]');
@@ -191,32 +211,27 @@ app.get("/enrich", async (req, res) => {
 
     // Debug mode
     if (req.query.debug === "1") {
-      // Step 1: Visit /Search/ landing
       await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
-      const landingUrl = page.url();
-      const landingHtml = await page.content();
       
-      // Step 2: Find and click criminal link
-      const links = await page.evaluate(() => 
-        Array.from(document.querySelectorAll('a')).map(a => ({href: a.href, text: a.textContent.trim()}))
-      );
+      // List all frames
+      const frameInfo = page.frames().map(f => ({ url: f.url(), name: f.name() }));
       
-      const crimLink = await page.$('a[href*="criminal"]') || await page.$('a[href*="Criminal"]');
-      let afterClickHtml = "no criminal link found";
-      let afterClickUrl = "";
-      if (crimLink) {
-        await crimLink.click();
-        await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
-        afterClickUrl = page.url();
-        afterClickHtml = await page.content();
+      // Get iframe content
+      const iframeFrame = page.frames().find(f => f.url().includes("Main.aspx") || f.url().includes("main"));
+      let iframeHtml = "no iframe found";
+      let iframeLinks = [];
+      if (iframeFrame) {
+        iframeHtml = await iframeFrame.content();
+        iframeLinks = await iframeFrame.evaluate(() =>
+          Array.from(document.querySelectorAll('a')).map(a => ({href: a.href, text: a.textContent.trim()}))
+        );
       }
       
       return res.json({
-        landingUrl,
-        landingSnippet: landingHtml.substring(0, 3000),
-        links: links.slice(0, 30),
-        afterClickUrl,
-        afterClickSnippet: (typeof afterClickHtml === 'string' ? afterClickHtml : '').substring(0, 3000),
+        mainUrl: page.url(),
+        frames: frameInfo,
+        iframeSnippet: (iframeHtml || '').substring(0, 3000),
+        iframeLinks: iframeLinks.slice(0, 30),
       });
     }
 
