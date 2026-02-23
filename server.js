@@ -50,7 +50,17 @@ async function getBrowser() {
 
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
+  // Must visit homepage first to establish ASP.NET session
+  await page.goto(BASE, { waitUntil: "networkidle2", timeout: 30000 });
+
+  // Navigate to criminal search via the case search link
+  await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
+
+  // Click criminal search link if needed, or go directly
   await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+
+  // Wait for the search input to appear
+  await page.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
 
   // Fill the person search box
   await page.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
