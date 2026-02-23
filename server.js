@@ -61,8 +61,9 @@ async function searchPerson(page, firstName, lastName) {
   // Find the deepest frame (Main.aspx, not mainpage.aspx)
   let searchFrame = null;
   for (const frame of page.frames()) {
-    const url = frame.url();
-    if (url.endsWith("/Main.aspx") || url.endsWith("/main.aspx")) {
+    const url = frame.url().toLowerCase();
+    // Match Main.aspx but NOT mainpage.aspx
+    if (url.includes("/main.aspx") && !url.includes("mainpage")) {
       searchFrame = frame;
       break;
     }
@@ -236,7 +237,8 @@ app.get("/enrich", async (req, res) => {
       // Try to find the deepest Main.aspx frame
       let deepFrame = null;
       for (const f of page.frames()) {
-        if (f.url().endsWith("/Main.aspx") || f.url().endsWith("/main.aspx")) {
+        const u = f.url().toLowerCase();
+        if (u.includes("/main.aspx") && !u.includes("mainpage")) {
           deepFrame = f;
           break;
         }
