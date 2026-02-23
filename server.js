@@ -66,62 +66,38 @@ async function findFrameWithSelector(page, selector, totalTimeoutMs = 30000) {
 
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
-  // Establish session through landing page
+  // Step 1: Establish ASP.NET session by visiting the landing page
   await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
-  await new Promise((r) => setTimeout(r, 2500));
+  await new Promise((r) => setTimeout(r, 2000));
 
-  // Find Main.aspx frame (where Criminal/Civil links live)
-  let menuFrame = null;
-  for (const frame of page.frames()) {
-    const u = frame.url().toLowerCase();
-    if (u.includes("/main.aspx") && !u.includes("mainpage")) {
-      menuFrame = frame;
-      break;
-    }
-  }
+  // Step 2: Navigate top-level page directly to criminal search
+  // Session cookies are set from step 1; no iframe manipulation needed
+  await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
 
-  if (!menuFrame) {
+  // Step 3: Check if we got the search page or an error
+  const pageContent = await page.content();
+  if (pageContent.includes("internal error") || pageContent.includes("An error has occurred")) {
+    // Session didn't stick — try alternate session establishment
+    // Visit Main.aspx directly first, then criminal search
     await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
-    menuFrame = page.mainFrame();
-  }
-
-  // Enter criminal search view
-  await menuFrame.waitForSelector("a", { timeout: 10000 });
-  const criminalLink =
-    (await menuFrame.$('a[href*="search.aspx?search=criminal"]')) ||
-    (await menuFrame.$('a[href*="criminal"]')) ||
-    (await menuFrame.$('a[href*="Criminal"]'));
-
-  if (criminalLink) {
-    await criminalLink.click();
-    await new Promise((r) => setTimeout(r, 2500));
-  } else {
-    // fallback to direct navigation
+    await new Promise((r) => setTimeout(r, 1500));
     await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
   }
 
-  // Re-acquire frame by selector (avoids stale frame/race issues)
-  let searchFrame = await findFrameWithSelector(page, "#ctl00_ContentPlaceHolder1_tbPersonSearch", 30000);
-  if (!searchFrame) {
-    // final fallback: direct criminal page + one more frame-aware search
-    await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
-    searchFrame = await findFrameWithSelector(page, "#ctl00_ContentPlaceHolder1_tbPersonSearch", 20000);
-  }
-  if (!searchFrame) {
-    throw new Error("Could not locate person search input in any frame");
-  }
+  // Step 4: Wait for search input on the main page (not in any iframe)
+  await page.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 20000 });
 
-  await searchFrame.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
+  await page.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
 
   // Submit via __EVENTTARGET pattern
-  await searchFrame.evaluate(() => {
+  await page.evaluate(() => {
     __doPostBack("ctl00$ContentPlaceHolder1$btnSearch", "");
   });
-  // Wait for results to load
-  await new Promise(r => setTimeout(r, 5000));
+  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {});
+  await new Promise(r => setTimeout(r, 2000));
 
   // Parse search results — look for case links
-  const cases = await searchFrame.evaluate(() => {
+  const cases = await page.evaluate(() => {
     const results = [];
     // Results are typically in a grid/table with links to CriminalCase.aspx
     const links = document.querySelectorAll('a[href*="CriminalCase.aspx"]');
