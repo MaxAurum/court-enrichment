@@ -50,18 +50,15 @@ async function getBrowser() {
 
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
-  // Step 1: Visit the Search landing page (establishes ASP.NET session)
+  // Step 1: Visit the Search landing page (establishes ASP.NET session via iframe)
   await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
 
-  // Step 2: Click the Criminal Case Search link on the landing page
-  const crimLink = await page.$('a[href*="criminal"]') || await page.$('a[href*="Criminal"]');
-  if (crimLink) {
-    await crimLink.click();
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
-  } else {
-    // Fallback: navigate directly
-    await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
-  }
+  // Step 2: The landing page loads Main.aspx in an iframe — get the frame
+  const frame = page.frames().find(f => f.url().includes("Main.aspx")) || page.mainFrame();
+  
+  // Step 3: Navigate within the frame context to criminal search
+  // Or just navigate directly now that session is established
+  await page.goto(`${BASE}/Search/search.aspx?search=criminal`, { waitUntil: "networkidle2", timeout: 30000 });
 
   // Wait for the search input to appear
   await page.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
