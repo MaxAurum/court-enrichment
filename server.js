@@ -48,62 +48,69 @@ async function getBrowser() {
   return browser;
 }
 
+async function findFrameWithSelector(page, selector, totalTimeoutMs = 30000) {
+  const started = Date.now();
+  while (Date.now() - started < totalTimeoutMs) {
+    for (const frame of page.frames()) {
+      try {
+        const handle = await frame.$(selector);
+        if (handle) return frame;
+      } catch {
+        // ignore detached frame errors and retry
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
+}
+
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
-  // The court site uses nested iframes: /Search/ → mainpage.aspx → iframe(Main.aspx)
-  // Strategy: visit /Search/ to establish session, then navigate the deepest frame
-  
+  // Establish session through landing page
   await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
-  
-  // Wait for nested iframes to load
-  await new Promise(r => setTimeout(r, 3000));
-  
-  // Find the deepest frame (Main.aspx, not mainpage.aspx)
-  let searchFrame = null;
+  await new Promise((r) => setTimeout(r, 2500));
+
+  // Find Main.aspx frame (where Criminal/Civil links live)
+  let menuFrame = null;
   for (const frame of page.frames()) {
-    const url = frame.url().toLowerCase();
-    // Match Main.aspx but NOT mainpage.aspx
-    if (url.includes("/main.aspx") && !url.includes("mainpage")) {
-      searchFrame = frame;
+    const u = frame.url().toLowerCase();
+    if (u.includes("/main.aspx") && !u.includes("mainpage")) {
+      menuFrame = frame;
       break;
     }
   }
 
-  if (!searchFrame) {
-    // If no Main.aspx frame found, try navigating directly 
-    // (session should be established from the /Search/ visit)
+  if (!menuFrame) {
     await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
-    searchFrame = page.mainFrame();
+    menuFrame = page.mainFrame();
   }
 
-  // Click "Criminal" link inside Main.aspx and wait for frame navigation
-  await searchFrame.waitForSelector('a', { timeout: 10000 });
-  const criminalLink = await searchFrame.$('a[href*="criminal"]') || await searchFrame.$('a[href*="Criminal"]');
+  // Enter criminal search view
+  await menuFrame.waitForSelector("a", { timeout: 10000 });
+  const criminalLink =
+    (await menuFrame.$('a[href*="search.aspx?search=criminal"]')) ||
+    (await menuFrame.$('a[href*="criminal"]')) ||
+    (await menuFrame.$('a[href*="Criminal"]'));
+
   if (criminalLink) {
-    // Click and wait for the frame to navigate
-    await Promise.all([
-      searchFrame.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }),
-      criminalLink.click(),
-    ]);
+    await criminalLink.click();
+    await new Promise((r) => setTimeout(r, 2500));
   } else {
-    // Direct navigate to criminal search in the frame
+    // fallback to direct navigation
     await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
   }
 
-  // After navigation, searchFrame reference should still be valid
-  // But re-find to be safe
-  for (const frame of page.frames()) {
-    const u = frame.url().toLowerCase();
-    if (u.includes("search.aspx") && u.includes("criminal")) {
-      searchFrame = frame;
-      break;
-    }
+  // Re-acquire frame by selector (avoids stale frame/race issues)
+  let searchFrame = await findFrameWithSelector(page, "#ctl00_ContentPlaceHolder1_tbPersonSearch", 30000);
+  if (!searchFrame) {
+    // final fallback: direct criminal page + one more frame-aware search
+    await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+    searchFrame = await findFrameWithSelector(page, "#ctl00_ContentPlaceHolder1_tbPersonSearch", 20000);
+  }
+  if (!searchFrame) {
+    throw new Error("Could not locate person search input in any frame");
   }
 
-  // Wait for the search input in the frame
-  await searchFrame.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
-
-  // Fill the person search box (in the frame)
   await searchFrame.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
 
   // Submit via __EVENTTARGET pattern
