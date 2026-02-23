@@ -50,36 +50,52 @@ async function getBrowser() {
 
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
-  // Step 1: Visit the Search landing page (loads Main.aspx in an iframe)
+  // The court site uses nested iframes: /Search/ → mainpage.aspx → iframe(Main.aspx)
+  // Strategy: visit /Search/ to establish session, then navigate the deepest frame
+  
   await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
+  
+  // Wait for nested iframes to load
+  await new Promise(r => setTimeout(r, 3000));
+  
+  // Find the deepest frame (Main.aspx, not mainpage.aspx)
+  let searchFrame = null;
+  for (const frame of page.frames()) {
+    const url = frame.url();
+    if (url.endsWith("/Main.aspx") || url.endsWith("/main.aspx")) {
+      searchFrame = frame;
+      break;
+    }
+  }
 
-  // Step 2: Wait for the iframe to load Main.aspx
-  await page.waitForFunction(() => {
-    const frames = document.querySelectorAll('iframe');
-    return frames.length > 0;
-  }, { timeout: 10000 });
-
-  // Step 3: Get the iframe frame context
-  const frames = page.frames();
-  let searchFrame = frames.find(f => f.url().includes("Main.aspx"));
   if (!searchFrame) {
-    // Fallback: navigate directly to Main.aspx
+    // If no Main.aspx frame found, try navigating directly 
+    // (session should be established from the /Search/ visit)
     await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
     searchFrame = page.mainFrame();
   }
 
-  // Step 4: Click "Criminal" link inside Main.aspx to get to criminal search
+  // Click "Criminal" link inside Main.aspx
+  await searchFrame.waitForSelector('a', { timeout: 10000 });
   const criminalLink = await searchFrame.$('a[href*="criminal"]') || await searchFrame.$('a[href*="Criminal"]');
   if (criminalLink) {
     await criminalLink.click();
-    await new Promise(r => setTimeout(r, 3000)); // Wait for navigation within iframe
+    await new Promise(r => setTimeout(r, 5000));
+  } else {
+    // Direct navigate to criminal search
+    await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+    searchFrame = page.mainFrame();
   }
 
-  // Step 5: Re-find the frame (URL may have changed)
-  const updatedFrames = page.frames();
-  searchFrame = updatedFrames.find(f => f.url().includes("search.aspx")) || searchFrame;
+  // Re-find frame after navigation
+  for (const frame of page.frames()) {
+    if (frame.url().includes("search.aspx")) {
+      searchFrame = frame;
+      break;
+    }
+  }
 
-  // Wait for the search input to appear (in the frame)
+  // Wait for the search input
   await searchFrame.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
 
   // Fill the person search box (in the frame)
@@ -212,26 +228,37 @@ app.get("/enrich", async (req, res) => {
     // Debug mode
     if (req.query.debug === "1") {
       await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
+      await new Promise(r => setTimeout(r, 3000));
       
-      // List all frames
+      // List ALL frames with URLs
       const frameInfo = page.frames().map(f => ({ url: f.url(), name: f.name() }));
       
-      // Get iframe content
-      const iframeFrame = page.frames().find(f => f.url().includes("Main.aspx") || f.url().includes("main"));
-      let iframeHtml = "no iframe found";
-      let iframeLinks = [];
-      if (iframeFrame) {
-        iframeHtml = await iframeFrame.content();
-        iframeLinks = await iframeFrame.evaluate(() =>
+      // Try to find the deepest Main.aspx frame
+      let deepFrame = null;
+      for (const f of page.frames()) {
+        if (f.url().endsWith("/Main.aspx") || f.url().endsWith("/main.aspx")) {
+          deepFrame = f;
+          break;
+        }
+      }
+      
+      let deepHtml = "not found";
+      let deepLinks = [];
+      if (deepFrame) {
+        deepHtml = await deepFrame.content();
+        deepLinks = await deepFrame.evaluate(() =>
           Array.from(document.querySelectorAll('a')).map(a => ({href: a.href, text: a.textContent.trim()}))
         );
       }
       
       return res.json({
         mainUrl: page.url(),
+        totalFrames: frameInfo.length,
         frames: frameInfo,
-        iframeSnippet: (iframeHtml || '').substring(0, 3000),
-        iframeLinks: iframeLinks.slice(0, 30),
+        deepFrameFound: !!deepFrame,
+        deepFrameUrl: deepFrame ? deepFrame.url() : null,
+        deepSnippet: (deepHtml || '').substring(0, 3000),
+        deepLinks: deepLinks.slice(0, 30),
       });
     }
 
