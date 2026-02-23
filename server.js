@@ -50,14 +50,18 @@ async function getBrowser() {
 
 // Search for a person and return matching case IDs
 async function searchPerson(page, firstName, lastName) {
-  // Must visit homepage first to establish ASP.NET session
-  await page.goto(BASE, { waitUntil: "networkidle2", timeout: 30000 });
+  // Step 1: Visit the Search landing page (establishes ASP.NET session)
+  await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
 
-  // Navigate to criminal search via the case search link
-  await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
-
-  // Click criminal search link if needed, or go directly
-  await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+  // Step 2: Click the Criminal Case Search link on the landing page
+  const crimLink = await page.$('a[href*="criminal"]') || await page.$('a[href*="Criminal"]');
+  if (crimLink) {
+    await crimLink.click();
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+  } else {
+    // Fallback: navigate directly
+    await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+  }
 
   // Wait for the search input to appear
   await page.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 15000 });
@@ -190,17 +194,32 @@ app.get("/enrich", async (req, res) => {
 
     // Debug mode
     if (req.query.debug === "1") {
-      await page.goto(BASE, { waitUntil: "networkidle2", timeout: 30000 });
-      const homeHtml = await page.content();
-      await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
-      const mainHtml = await page.content();
-      await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
-      const searchHtml = await page.content();
+      // Step 1: Visit /Search/ landing
+      await page.goto(`${BASE}/Search/`, { waitUntil: "networkidle2", timeout: 30000 });
+      const landingUrl = page.url();
+      const landingHtml = await page.content();
+      
+      // Step 2: Find and click criminal link
+      const links = await page.evaluate(() => 
+        Array.from(document.querySelectorAll('a')).map(a => ({href: a.href, text: a.textContent.trim()}))
+      );
+      
+      const crimLink = await page.$('a[href*="criminal"]') || await page.$('a[href*="Criminal"]');
+      let afterClickHtml = "no criminal link found";
+      let afterClickUrl = "";
+      if (crimLink) {
+        await crimLink.click();
+        await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+        afterClickUrl = page.url();
+        afterClickHtml = await page.content();
+      }
+      
       return res.json({
-        homeUrl: page.url(),
-        homeSnippet: homeHtml.substring(0, 2000),
-        mainSnippet: mainHtml.substring(0, 2000),
-        searchSnippet: searchHtml.substring(0, 2000),
+        landingUrl,
+        landingSnippet: landingHtml.substring(0, 3000),
+        links: links.slice(0, 30),
+        afterClickUrl,
+        afterClickSnippet: (typeof afterClickHtml === 'string' ? afterClickHtml : '').substring(0, 3000),
       });
     }
 
