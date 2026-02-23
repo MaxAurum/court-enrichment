@@ -76,15 +76,33 @@ async function searchPerson(page, firstName, lastName) {
 
   // Step 3: Check if we got the search page or an error
   const pageContent = await page.content();
-  if (pageContent.includes("internal error") || pageContent.includes("An error has occurred")) {
-    // Session didn't stick — try alternate session establishment
-    // Visit Main.aspx directly first, then criminal search
+  const hasError = pageContent.includes("internal error") || pageContent.includes("An error has occurred");
+  const hasInput = pageContent.includes("tbPersonSearch");
+  
+  if (hasError || !hasInput) {
+    // Session from /Search/ didn't transfer — the iframe loads Main.aspx which
+    // sets its own session. We need to navigate through Main.aspx first.
+    // Go to Main.aspx (the actual ASP.NET app entry), then criminal search
     await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 1000));
+    // Now navigate to criminal search — session should be established
     await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+    
+    // Check again
+    const content2 = await page.content();
+    const hasInput2 = content2.includes("tbPersonSearch");
+    const hasError2 = content2.includes("internal error") || content2.includes("An error has occurred");
+    
+    if (!hasInput2 || hasError2) {
+      // Last resort: use JavaScript navigation from within Main.aspx context
+      // by going back to Main.aspx and using window.location
+      await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
+      await page.evaluate((url) => { window.location.href = url; }, SEARCH_URL);
+      await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 });
+    }
   }
 
-  // Step 4: Wait for search input on the main page (not in any iframe)
+  // Step 4: Wait for search input on the main page
   await page.waitForSelector("#ctl00_ContentPlaceHolder1_tbPersonSearch", { timeout: 20000 });
 
   await page.type("#ctl00_ContentPlaceHolder1_tbPersonSearch", `${lastName}, ${firstName}`);
