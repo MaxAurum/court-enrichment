@@ -188,6 +188,22 @@ app.get("/enrich", async (req, res) => {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
 
+    // Debug mode
+    if (req.query.debug === "1") {
+      await page.goto(BASE, { waitUntil: "networkidle2", timeout: 30000 });
+      const homeHtml = await page.content();
+      await page.goto(`${BASE}/Search/Main.aspx`, { waitUntil: "networkidle2", timeout: 30000 });
+      const mainHtml = await page.content();
+      await page.goto(SEARCH_URL, { waitUntil: "networkidle2", timeout: 30000 });
+      const searchHtml = await page.content();
+      return res.json({
+        homeUrl: page.url(),
+        homeSnippet: homeHtml.substring(0, 2000),
+        mainSnippet: mainHtml.substring(0, 2000),
+        searchSnippet: searchHtml.substring(0, 2000),
+      });
+    }
+
     // Step 1: Search
     const cases = await searchPerson(page, firstName, lastName);
     if (!cases.length) {
